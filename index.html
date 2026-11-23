@@ -127,7 +127,8 @@ const DAYS = [
 const DEFAULTS = {
   push:['Pec deck','Incline bench','One-hand tricep extension','Overhead tricep extension','Cable lateral raise','Shoulder press machine'],
   pull:['Lat pulldown','T-bar row','One-hand row','Rear delts','Preacher curl machine','Hammer cable curl'],
-  legs:[], upper:[], lower:[]
+  legs:['Lying leg curl','RDL','Leg press','Calf raise','Leg extension'],
+  upper:[], lower:[]
 };
 
 /* ---------- Password lock: data is encrypted (AES-GCM) with a key derived from the password ---------- */
@@ -484,6 +485,11 @@ function showApp(){
     state.date = today;
     state.weekStart = mondayOf(today);
     state.day = inProgress.length ? inProgress[inProgress.length-1].day : nextUpDay();
+  }
+  if(!db.legsSeeded){
+    db.legsSeeded = true;
+    if(!db.exercises.legs || !db.exercises.legs.length) db.exercises.legs = DEFAULTS.legs.slice();
+    save();
   }
   gate.hidden = true; wrap.hidden = false; render();
 }
