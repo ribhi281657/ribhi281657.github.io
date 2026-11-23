@@ -83,6 +83,19 @@ svg.chart{width:100%;height:auto;background:var(--card);border:1px solid var(--l
 .gate .btn{width:100%;padding:12px}
 .gate .msg{min-height:1.4em;margin:10px 0 0;color:var(--accent);font-size:14px}
 .gate .btn.link{width:auto;margin:8px 0 0;padding:6px 0;color:var(--muted)}
+.week{margin-bottom:16px}
+.weekhead{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.weekhead strong{font:700 19px var(--head)}
+.weekhead .btn{padding:4px 12px;font-size:18px}
+.wk{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.wk button{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px 2px 9px;text-align:center;display:flex;flex-direction:column;gap:1px}
+.wk .d{font-size:12px;color:var(--muted)}
+.wk .w{font:700 18px/1.1 var(--head)}
+.wk .s{font-size:12px;font-weight:600;color:var(--muted);min-height:1.2em}
+.wk .done .s{color:var(--good)}
+.wk .missed .s{color:var(--accent)}
+.wk .next{border:2px solid var(--accent);padding:7px 1px 8px}
+.wk button[aria-pressed="true"]{box-shadow:inset 0 -4px 0 var(--ink)}
 .sr{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
 .nav .lock{margin-left:auto;font-size:16px}
 .panel .cell{text-align:left;margin-bottom:10px;font-weight:500}
@@ -182,7 +195,7 @@ function dayForToday(){
   return DAYS[(wd>=1 && wd<=5) ? wd-1 : 0].id;
 }
 
-const state = {view:'log', day:dayForToday(), date:iso(new Date()), pex:null};
+const state = {view:'log', day:dayForToday(), date:iso(new Date()), weekStart:null, started:false, pex:null};
 
 function findSession(){ return db.sessions.find(s=>s.date===state.date && s.day===state.day); }
 function ensureSession(){
@@ -200,11 +213,69 @@ function lastFor(ex){
 function setsText(sets){ return filled(sets).map(x=>x.w+'×'+x.r).join(', '); }
 function e1rm(w,r){ return w*(1+r/30); }
 
+/* ---------- Schedule: week view and rotation ---------- */
+function parseISO(s){ const [y,m,d] = s.split('-').map(Number); return new Date(y,m-1,d); }
+function addDays(s,n){ const d = parseISO(s); d.setDate(d.getDate()+n); return iso(d); }
+function mondayOf(s){ const d = parseISO(s); d.setDate(d.getDate()-((d.getDay()+6)%7)); return iso(d); }
+function loggedSessions(){ return db.sessions.filter(s=>Object.values(s.entries).some(a=>filled(a).length)); }
+function hasData(s){ return Object.values(s.entries).some(a=>a.some(x=>x.w!=='' || x.r!=='')); }
+function lastLogged(){
+  const l = loggedSessions().sort((a,b)=>a.date.localeCompare(b.date));
+  return l[l.length-1] || null;
+}
+function dayIndex(id){ return DAYS.findIndex(d=>d.id===id); }
+function nextUpDay(){
+  const l = lastLogged();
+  return l ? DAYS[(dayIndex(l.day)+1)%DAYS.length].id : DAYS[0].id;
+}
+/* Assigns the rotation to each weekday from today on, continuing after the last workout logged. */
+function project(endISO){
+  const last = lastLogged(), t = iso(new Date()), map = {};
+  let i = last ? (dayIndex(last.day)+1)%DAYS.length : 0;
+  let d = (last && last.date>=t) ? addDays(last.date,1) : t;
+  while(d<=endISO){
+    const wd = parseISO(d).getDay();
+    if(wd>=1 && wd<=5){ map[d] = DAYS[i].id; i = (i+1)%DAYS.length; }
+    d = addDays(d,1);
+  }
+  return map;
+}
+function weekHTML(){
+  const t = iso(new Date()), start = state.weekStart, end = addDays(start,4);
+  const proj = project(end);
+  const nextDate = Object.keys(project(addDays(t,10))).sort()[0];
+  const logs = loggedSessions(), first = logs.map(s=>s.date).sort()[0];
+  let cells = '';
+  for(let k=0;k<5;k++){
+    const dt = addDays(start,k), plan = DAYS[k];
+    const here = logs.filter(s=>s.date===dt);
+    let cls = '', label = '', day = plan.id, name = plan.name;
+    if(here.length){
+      cls = 'done'; label = '✓ Done'; day = here[0].day;
+      name = here.map(s=>DAYS[dayIndex(s.day)].name).join(' + ');
+    }else if(dt<t){
+      if(first && dt>=first){ cls = 'missed'; label = 'Missed'; }
+    }else if(proj[dt]){
+      day = proj[dt]; name = DAYS[dayIndex(day)].name;
+      if(dt===nextDate){ cls = 'next'; label = 'Next up'; } else label = 'Planned';
+    }
+    cells += `<button data-wk="${dt}|${day}" class="${cls}" aria-pressed="${dt===state.date}">
+      <span class="d">${plan.wd} ${parseISO(dt).getDate()}</span><span class="w">${esc(name)}</span><span class="s">${label}</span></button>`;
+  }
+  return `<div class="week"><div class="weekhead">
+    <button class="btn ghost" data-wkshift="-1" aria-label="Previous week">‹</button>
+    <strong>Week of ${esc(fmt(start))}</strong>
+    <button class="btn ghost" data-wkshift="1" aria-label="Next week">›</button>
+    <button class="btn link" data-wknow="1">This week</button></div>
+    <div class="wk">${cells}</div></div>`;
+}
+
 /* ---------- Log view ---------- */
 function renderLog(){
   const list = db.exercises[state.day] || [];
   const ses = findSession();
   let h = `<div class="bar"><label>Date <input type="date" id="date" value="${state.date}"></label></div>`;
+  h += weekHTML();
   h += '<div class="days" role="group" aria-label="Workout day">' + DAYS.map(d =>
     `<button data-day="${d.id}" aria-pressed="${d.id===state.day}">${d.name}<small>${d.wd}</small></button>`).join('') + '</div>';
 
@@ -324,7 +395,7 @@ app.addEventListener('input', e=>{
 });
 
 app.addEventListener('change', e=>{
-  if(e.target.id==='date' && e.target.value){ state.date = e.target.value; render(); }
+  if(e.target.id==='date' && e.target.value){ state.date = e.target.value; state.weekStart = mondayOf(state.date); render(); }
   if(e.target.id==='pex'){ state.pex = e.target.value; render(); }
   if(e.target.id==='import'){
     const f = e.target.files[0]; if(!f) return;
@@ -351,6 +422,11 @@ app.addEventListener('submit', e=>{
 });
 
 app.addEventListener('click', async e=>{
+  const wk = e.target.closest('button[data-wk]');
+  if(wk){ const [dt,dy] = wk.dataset.wk.split('|'); state.date = dt; state.day = dy; render(); return; }
+  const sh = e.target.closest('button[data-wkshift]');
+  if(sh){ state.weekStart = addDays(state.weekStart, 7*(+sh.dataset.wkshift)); render(); return; }
+  if(e.target.closest('button[data-wknow]')){ state.weekStart = mondayOf(iso(new Date())); render(); return; }
   const dayBtn = e.target.closest('button[data-day]');
   if(dayBtn){ state.day = dayBtn.dataset.day; render(); return; }
   const b = e.target.closest('button[data-act]'); if(!b) return;
@@ -400,7 +476,17 @@ app.addEventListener('click', async e=>{
 /* ---------- Lock screen ---------- */
 const gate = document.getElementById('gate'), wrap = document.getElementById('wrap');
 
-function showApp(){ gate.hidden = true; wrap.hidden = false; render(); }
+function showApp(){
+  if(!state.started){
+    state.started = true;
+    const today = iso(new Date());
+    const inProgress = db.sessions.filter(s=>s.date===today && hasData(s));
+    state.date = today;
+    state.weekStart = mondayOf(today);
+    state.day = inProgress.length ? inProgress[inProgress.length-1].day : nextUpDay();
+  }
+  gate.hidden = true; wrap.hidden = false; render();
+}
 
 function showGate(){
   wrap.hidden = true; gate.hidden = false;
