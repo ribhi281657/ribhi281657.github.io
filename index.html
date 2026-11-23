@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lift log</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="lifts-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lifts">
+<meta name="theme-color" content="#1c2631">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -68,15 +74,29 @@ svg.chart{width:100%;height:auto;background:var(--card);border:1px solid var(--l
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:1}
 @media (prefers-reduced-motion:reduce){.toast{transition:none}}
+[hidden]{display:none!important}
+.gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.gate form,.gate .box{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:22px;width:100%;max-width:360px}
+.gate h1{margin-top:0}
+.gate p{margin:0 0 14px;color:var(--muted);font-size:15px}
+.gate .cell{text-align:left;margin-bottom:10px;font-weight:500}
+.gate .btn{width:100%;padding:12px}
+.gate .msg{min-height:1.4em;margin:10px 0 0;color:var(--accent);font-size:14px}
+.gate .btn.link{width:auto;margin:8px 0 0;padding:6px 0;color:var(--muted)}
+.sr{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none}
+.nav .lock{margin-left:auto;font-size:16px}
+.panel .cell{text-align:left;margin-bottom:10px;font-weight:500}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="gate" id="gate" hidden></div>
+<div class="wrap" id="wrap" hidden>
   <h1>Lift log</h1>
   <nav class="nav" aria-label="Sections">
     <button data-view="log">Log</button>
     <button data-view="progress">Progress</button>
     <button data-view="data">Backup</button>
+    <button class="lock" id="lockbtn">Lock</button>
   </nav>
   <main id="app"></main>
 </div>
@@ -97,17 +117,54 @@ const DEFAULTS = {
   legs:[], upper:[], lower:[]
 };
 
-function load(){
-  try{
-    const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && s.exercises && Array.isArray(s.sessions)) return s;
-  }catch(e){}
-  return {exercises: JSON.parse(JSON.stringify(DEFAULTS)), sessions: []};
+/* ---------- Password lock: data is encrypted (AES-GCM) with a key derived from the password ---------- */
+const VAULT = 'liftlog.vault', SESS = 'liftlog.sk';
+let db = null, cryptoKey = null, vaultSalt = null, saveChain = Promise.resolve();
+const te = new TextEncoder(), td = new TextDecoder();
+
+function toB64(buf){
+  const a = new Uint8Array(buf); let s = '';
+  for(let i=0;i<a.length;i+=0x8000) s += String.fromCharCode.apply(null, a.subarray(i,i+0x8000));
+  return btoa(s);
 }
-let db = load();
+function fromB64(s){ return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
+async function deriveKey(pw, salt){
+  const base = await crypto.subtle.importKey('raw', te.encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:310000, hash:'SHA-256'},
+    base, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+}
+async function decryptVault(key, v){
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:fromB64(v.iv)}, key, fromB64(v.data));
+  const s = JSON.parse(td.decode(pt));
+  if(!validDb(s)) throw new Error('bad data');
+  return s;
+}
+function validDb(s){ return s && s.exercises && Array.isArray(s.sessions); }
+function defaultDb(){ return {exercises: JSON.parse(JSON.stringify(DEFAULTS)), sessions: []}; }
+function legacyDb(){
+  try{ const s = JSON.parse(localStorage.getItem(KEY)); if(validDb(s)) return s; }catch(e){}
+  return null;
+}
 function save(){
-  try{ localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch(e){ toast('Could not save. Your browser may be blocking storage.'); }
+  saveChain = saveChain.then(async()=>{
+    if(!cryptoKey || !db) return;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, cryptoKey, te.encode(JSON.stringify(db)));
+    localStorage.setItem(VAULT, JSON.stringify({v:1, salt:toB64(vaultSalt), iv:toB64(iv), data:toB64(ct)}));
+  }).catch(()=>toast('Could not save. Your browser may be blocking storage.'));
+  return saveChain;
+}
+async function rememberKey(){
+  try{ sessionStorage.setItem(SESS, JSON.stringify(await crypto.subtle.exportKey('jwk', cryptoKey))); }catch(e){}
+}
+async function resume(){
+  try{
+    const jwk = sessionStorage.getItem(SESS), v = JSON.parse(localStorage.getItem(VAULT));
+    if(!jwk || !v) return false;
+    const key = await crypto.subtle.importKey('jwk', JSON.parse(jwk), {name:'AES-GCM'}, true, ['encrypt','decrypt']);
+    db = await decryptVault(key, v); cryptoKey = key; vaultSalt = fromB64(v.salt);
+    return true;
+  }catch(e){ sessionStorage.removeItem(SESS); return false; }
 }
 function toast(msg){
   const t = document.getElementById('toast');
@@ -234,7 +291,11 @@ function renderData(){
     <p>${n} workout${n===1?'':'s'} logged.</p>
     <button class="btn" data-act="export">Download backup</button></div>
     <div class="panel"><p>Restore from a backup file. This replaces what is on this device.</p>
-    <input type="file" id="import" accept="application/json,.json"></div>`;
+    <input type="file" id="import" accept="application/json,.json"></div>
+    <div class="panel"><p>Change your password. Your log is re-encrypted with the new one.</p>
+    <input class="cell" type="password" id="newpw" autocomplete="new-password" placeholder="New password" aria-label="New password">
+    <button class="btn" data-act="changepw">Change password</button></div>
+    <div class="panel"><p>Backup files are not encrypted. Keep them somewhere private.</p></div>`;
 }
 
 /* ---------- Wiring ---------- */
@@ -289,11 +350,26 @@ app.addEventListener('submit', e=>{
   list.push(v); save(); render();
 });
 
-app.addEventListener('click', e=>{
+app.addEventListener('click', async e=>{
   const dayBtn = e.target.closest('button[data-day]');
   if(dayBtn){ state.day = dayBtn.dataset.day; render(); return; }
   const b = e.target.closest('button[data-act]'); if(!b) return;
   const act = b.dataset.act;
+  if(act==='changepw'){
+    const pw = document.getElementById('newpw').value;
+    if(!pw){ toast('Enter a new password.'); return; }
+    b.disabled = true;
+    try{
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const key = await deriveKey(pw, salt);
+      vaultSalt = salt; cryptoKey = key;
+      await save(); await rememberKey();
+      document.getElementById('newpw').value = '';
+      toast('Password changed');
+    }catch(err){ toast('Could not change the password.'); }
+    b.disabled = false;
+    return;
+  }
   if(act==='export'){
     const blob = new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
     const a = document.createElement('a');
@@ -321,7 +397,90 @@ app.addEventListener('click', e=>{
   }
 });
 
-render();
+/* ---------- Lock screen ---------- */
+const gate = document.getElementById('gate'), wrap = document.getElementById('wrap');
+
+function showApp(){ gate.hidden = true; wrap.hidden = false; render(); }
+
+function showGate(){
+  wrap.hidden = true; gate.hidden = false;
+  const hasVault = !!localStorage.getItem(VAULT);
+  if(hasVault){
+    gate.innerHTML = `<form id="unlock"><h1>Lift log</h1>
+      <input class="sr" type="text" name="username" value="Lift log" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
+      <p>Enter your password to open your log.</p>
+      <input class="cell" type="password" name="pw" autocomplete="current-password" aria-label="Password" required>
+      <button class="btn" type="submit">Unlock</button>
+      <p class="msg" role="alert"></p>
+      <button class="btn link" type="button" data-gate="forgot">Forgot password</button></form>`;
+  }else{
+    gate.innerHTML = `<form id="setup"><h1>Lift log</h1>
+      <input class="sr" type="text" name="username" value="Lift log" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
+      <p>Choose a password. It locks your log on this device${legacyDb() ? ', including the workouts you have already saved' : ''}.</p>
+      <p>If you forget it, the log can’t be recovered. Download a backup from the Backup tab once you are in.</p>
+      <input class="cell" type="password" name="pw" autocomplete="new-password" placeholder="Password" aria-label="Password" required>
+      <button class="btn" type="submit">Set password</button>
+      <p class="msg" role="alert"></p></form>`;
+  }
+  const f = gate.querySelector('input[type=password]'); if(f) f.focus();
+}
+
+gate.addEventListener('submit', async e=>{
+  e.preventDefault();
+  const f = e.target, msg = gate.querySelector('.msg'), btn = f.querySelector('button[type=submit]');
+  const pw = f.pw.value;
+  btn.disabled = true; msg.textContent = 'Working…';
+  try{
+    if(f.id==='unlock'){
+      const v = JSON.parse(localStorage.getItem(VAULT));
+      const salt = fromB64(v.salt);
+      const key = await deriveKey(pw, salt);
+      let data;
+      try{ data = await decryptVault(key, v); }
+      catch(err){ msg.textContent = 'Wrong password.'; btn.disabled = false; f.pw.select(); return; }
+      db = data; cryptoKey = key; vaultSalt = salt;
+    }else{
+      if(!pw){ msg.textContent = 'Enter a password.'; btn.disabled = false; return; }
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const key = await deriveKey(pw, salt);
+      vaultSalt = salt; cryptoKey = key;
+      db = legacyDb() || defaultDb();
+      await save();
+      if(!localStorage.getItem(VAULT)) throw new Error('not saved');
+      localStorage.removeItem(KEY);
+    }
+    await rememberKey();
+    showApp();
+  }catch(err){
+    msg.textContent = 'Something went wrong. Reload and try again.';
+    btn.disabled = false;
+  }
+});
+
+gate.addEventListener('click', e=>{
+  if(e.target.dataset.gate==='forgot'){
+    if(confirm('This erases the log stored on this device so you can set a new password. You can restore a backup file afterwards. Continue?')){
+      localStorage.removeItem(VAULT); sessionStorage.removeItem(SESS); showGate();
+    }
+  }
+});
+
+document.getElementById('lockbtn').addEventListener('click', async ()=>{
+  await saveChain;
+  sessionStorage.removeItem(SESS);
+  db = null; cryptoKey = null; vaultSalt = null;
+  showGate();
+});
+
+async function boot(){
+  if(!window.crypto || !crypto.subtle){
+    wrap.hidden = true; gate.hidden = false;
+    gate.innerHTML = '<div class="box"><h1>Lift log</h1><p>The password lock needs a secure connection. Open this page over https.</p></div>';
+    return;
+  }
+  if(await resume()) showApp(); else showGate();
+}
+boot();
 </script>
 </body>
 </html>
