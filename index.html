@@ -130,6 +130,11 @@ const DEFAULTS = {
   legs:['Lying leg curl','RDL','Leg press','Calf raise','Leg extension'],
   upper:[], lower:[]
 };
+// Upper = everything from push and pull; Lower = same as legs. Both default to 2 sets.
+DEFAULTS.upper = DEFAULTS.push.concat(DEFAULTS.pull);
+DEFAULTS.lower = DEFAULTS.legs.slice();
+const SETS_PER_DAY = {push:3, pull:3, legs:3, upper:2, lower:2};
+function setCount(){ return SETS_PER_DAY[state.day] || 3; }
 
 /* ---------- Password lock: data is encrypted (AES-GCM) with a key derived from the password ---------- */
 const VAULT = 'liftlog.vault', SESS = 'liftlog.sk';
@@ -285,7 +290,7 @@ function renderLog(){
   list.forEach((ex,i)=>{
     const cur = (ses && ses.entries[ex]) || [];
     const last = lastFor(ex);
-    const n = Math.max(3, cur.length);
+    const n = Math.max(setCount(), cur.length);
     h += `<section class="ex"><header><h2>${esc(ex)}</h2></header>`;
     h += `<p class="last">${last ? 'Last ('+fmt(last.date)+'): '+esc(setsText(last.sets)) : 'No earlier sessions logged'}</p>`;
     h += '<div class="sets"><span class="h">Set</span><span class="h">Weight (lb)</span><span class="h">Reps</span><span></span>';
@@ -458,13 +463,13 @@ app.addEventListener('click', async e=>{
   if(act==='addset'){
     const ses = ensureSession();
     const arr = ses.entries[name] = ses.entries[name] || [];
-    while(arr.length<3) arr.push({w:'',r:''});
+    while(arr.length<setCount()) arr.push({w:'',r:''});
     arr.push({w:'',r:''}); save(); render();
   }
   if(act==='rmset'){
     const ses = ensureSession();
     const arr = ses.entries[name] = ses.entries[name] || [];
-    while(arr.length<3) arr.push({w:'',r:''});
+    while(arr.length<setCount()) arr.push({w:'',r:''});
     arr.splice(+b.dataset.s,1); save(); render();
   }
   if(act==='rmex'){
@@ -486,9 +491,11 @@ function showApp(){
     state.weekStart = mondayOf(today);
     state.day = inProgress.length ? inProgress[inProgress.length-1].day : nextUpDay();
   }
-  if(!db.legsSeeded){
-    db.legsSeeded = true;
-    if(!db.exercises.legs || !db.exercises.legs.length) db.exercises.legs = DEFAULTS.legs.slice();
+  if(!db.splitSeeded){
+    db.splitSeeded = true;
+    ['legs','upper','lower'].forEach(k=>{
+      if(!db.exercises[k] || !db.exercises[k].length) db.exercises[k] = DEFAULTS[k].slice();
+    });
     save();
   }
   gate.hidden = true; wrap.hidden = false; render();
