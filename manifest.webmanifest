@@ -1,0 +1,19 @@
+{
+  "name": "Lift log",
+  "short_name": "Lifts",
+  "display": "standalone",
+  "background_color": "#e8e6e1",
+  "theme_color": "#1c2631",
+  "icons": [
+    {
+      "src": "lifts-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "lifts-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
