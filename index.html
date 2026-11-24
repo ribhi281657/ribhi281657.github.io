@@ -152,6 +152,7 @@ const SETS_PER_DAY = {push:3, pull:3, legs:3, upper:2, lower:2};
 function setCount(){ return SETS_PER_DAY[state.day] || 3; }
 
 /* ---------- Password lock: data is encrypted (AES-GCM) with a key derived from the password ---------- */
+const APP_VERSION = '2026-11-24';
 const VAULT = 'liftlog.vault', SESS = 'liftlog.sk';
 let db = null, cryptoKey = null, vaultSalt = null, saveChain = Promise.resolve();
 const te = new TextEncoder(), td = new TextDecoder();
@@ -458,6 +459,8 @@ function renderData(){
     <div class="panel"><p>Change your password. Your log is re-encrypted with the new one.</p>
     <input class="cell" type="password" id="newpw" autocomplete="new-password" placeholder="New password" aria-label="New password">
     <button class="btn" data-act="changepw">Change password</button></div>
+    <div class="panel"><p>Version ${APP_VERSION}. If the page looks out of date after you upload an update, tap below. It reloads the newest copy and keeps your saved data. Never delete the home screen icon to update it, because that erases what is saved in the app.</p>
+    <button class="btn" data-act="reload">Get latest version</button></div>
     <div class="panel"><p>Backup files include your Why photos and are not encrypted. Keep them somewhere private.</p></div>`;
 }
 
@@ -570,6 +573,7 @@ app.addEventListener('click', async e=>{
     document.body.appendChild(a); a.click(); a.remove();
     return;
   }
+  if(act==='reload'){ location.replace(location.pathname + '?r=' + Date.now()); return; }
   const i = +b.dataset.e, name = db.exercises[state.day][i];
   if(act==='addset'){
     const ses = ensureSession();
